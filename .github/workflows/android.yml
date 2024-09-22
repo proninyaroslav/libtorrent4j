@@ -3,6 +3,7 @@ name: Android
 on:
   push:
     branches:
+      - fix-ci
       - master
   pull_request:
     branches:
