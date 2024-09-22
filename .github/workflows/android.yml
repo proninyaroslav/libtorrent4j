@@ -20,7 +20,7 @@ jobs:
   arm-b2:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: setup boost
@@ -76,7 +76,7 @@ jobs:
         run: |
           export ANDROID_TOOLCHAIN="${PWD}/android-ndk/toolchains/llvm/prebuilt/linux-x86_64"
           ${ANDROID_TOOLCHAIN}/bin/llvm-readelf -d swig/bin/release/android/armeabi-v7a/libtorrent4j.so
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
           name: libtorrent4j-android-arm-b2
           path: |
@@ -87,7 +87,7 @@ jobs:
   arm64-b2:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: setup boost
@@ -143,7 +143,7 @@ jobs:
         run: |
           export ANDROID_TOOLCHAIN="${PWD}/android-ndk/toolchains/llvm/prebuilt/linux-x86_64"
           ${ANDROID_TOOLCHAIN}/bin/llvm-readelf -d swig/bin/release/android/arm64-v8a/libtorrent4j.so
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
           name: libtorrent4j-android-arm64-b2
           path: |
@@ -154,7 +154,7 @@ jobs:
   x86-b2:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: setup boost
@@ -210,7 +210,7 @@ jobs:
         run: |
           export ANDROID_TOOLCHAIN="${PWD}/android-ndk/toolchains/llvm/prebuilt/linux-x86_64"
           ${ANDROID_TOOLCHAIN}/bin/llvm-readelf -d swig/bin/release/android/x86/libtorrent4j.so
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
           name: libtorrent4j-android-x86-b2
           path: |
@@ -221,7 +221,7 @@ jobs:
   x86_64-b2:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: setup boost
@@ -277,7 +277,7 @@ jobs:
         run: |
           export ANDROID_TOOLCHAIN="${PWD}/android-ndk/toolchains/llvm/prebuilt/linux-x86_64"
           ${ANDROID_TOOLCHAIN}/bin/llvm-readelf -d swig/bin/release/android/x86_64/libtorrent4j.so
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
           name: libtorrent4j-android-x86_64-b2
           path: |
