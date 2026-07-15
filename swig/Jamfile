@@ -53,6 +53,7 @@ lib torrent4j
 
     : # sources
 	 libtorrent_jni.cpp
+	 saf_disk_io.cpp
 
     : # requirements
     <conditional>@libtorrent_linking

@@ -16,10 +16,12 @@ project(libtorrent4j
 set(include_files
     jni.h
     libtorrent.hpp
-    libtorrent_jni.h)
+    libtorrent_jni.h
+    saf_disk_io.hpp)
 
 set(source_files
-    libtorrent_jni.cpp)
+    libtorrent_jni.cpp
+    saf_disk_io.cpp)
 
 add_library(torrent4j SHARED
     ${source_files}
