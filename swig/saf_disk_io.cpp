@@ -25,6 +25,7 @@
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/operations.hpp"
+#include "libtorrent/peer_request.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -102,7 +103,7 @@ JNIEnv* saf_disk_io::attach_jni() const
         // this skeleton, so never detaching is a bounded, one-time-per-thread
         // leak of a JNIEnv, not an unbounded one. Revisit if the pool is ever
         // made to spin threads up/down dynamically.
-        m_jvm->AttachCurrentThread(&env, nullptr);
+        m_jvm->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr);
     }
     return env;
 }
@@ -153,7 +154,7 @@ lt::storage_holder saf_disk_io::new_torrent(lt::storage_params const& p,
     t->files = p.files; // owned copy; p.files is only a reference valid for this call
     t->save_path.assign(p.path.data(), p.path.size());
     t->info_hash = p.info_hash;
-    t->fds.resize(static_cast<std::size_t>(t->files.num_files()));
+    t->fds.assign(static_cast<std::size_t>(t->files.num_files()), -1);
 
     std::uint32_t storage_idx;
     {
@@ -188,13 +189,13 @@ void saf_disk_io::release_all(torrent_entry& t)
     jstring save_path = env->NewStringUTF(t.save_path.c_str());
 
     for (int i = 0; i < static_cast<int>(t.fds.size()); i++) {
-        if (t.fds[i].fd < 0) continue;
+        if (t.fds[i] < 0) continue;
         std::string rel_path = t.files.file_path(lt::file_index_t(i));
         jstring rel = env->NewStringUTF(rel_path.c_str());
         env->CallVoidMethod(m_bridge, m_mid_release_file, info_hash, i,
-                             static_cast<jlong>(t.fds[i].fd), rel, save_path);
-        ::close(t.fds[i].fd); // native side owns the fd; bridge impl must NOT close it too
-        t.fds[i].fd = -1;
+                             static_cast<jlong>(t.fds[i]), rel, save_path);
+        ::close(t.fds[i]); // native side owns the fd; bridge impl must NOT close it too
+        t.fds[i] = -1;
         env->DeleteLocalRef(rel);
     }
     env->DeleteLocalRef(info_hash);
@@ -203,25 +204,42 @@ void saf_disk_io::release_all(torrent_entry& t)
 
 int saf_disk_io::fd_for(torrent_entry& t, lt::file_index_t file_idx)
 {
-    file_entry& fe = t.fds[static_cast<std::size_t>(static_cast<int>(file_idx))];
-    std::call_once(fe.open_once, [&] {
-        JNIEnv* env = attach_jni();
-        jbyteArray info_hash = env->NewByteArray(20);
-        env->SetByteArrayRegion(info_hash, 0, 20,
-            reinterpret_cast<const jbyte*>(t.info_hash.data()));
-        std::string rel_path = t.files.file_path(file_idx);
-        jstring rel = env->NewStringUTF(rel_path.c_str());
-        jstring save_path = env->NewStringUTF(t.save_path.c_str());
+    auto const i = static_cast<std::size_t>(static_cast<int>(file_idx));
 
-        jlong fd = env->CallLongMethod(m_bridge, m_mid_open_file, info_hash,
-                                        static_cast<int>(file_idx), rel, save_path);
-        fe.fd = static_cast<int>(fd); // -1 on failure
+    // Fast path: already opened. Double-checked under `mutex` for the
+    // first-open race instead of a per-file once_flag/atomic, since those
+    // aren't move/copy-constructible and can't live as std::vector elements
+    // (see torrent_entry::fds) -- contention only happens on first touch of
+    // each file, so a shared per-torrent lock is fine here.
+    {
+        std::lock_guard<std::mutex> lock(t.mutex);
+        if (t.fds[i] >= 0) return t.fds[i];
+    }
 
-        env->DeleteLocalRef(info_hash);
-        env->DeleteLocalRef(rel);
-        env->DeleteLocalRef(save_path);
-    });
-    return fe.fd;
+    JNIEnv* env = attach_jni();
+    jbyteArray info_hash = env->NewByteArray(20);
+    env->SetByteArrayRegion(info_hash, 0, 20,
+        reinterpret_cast<const jbyte*>(t.info_hash.data()));
+    std::string rel_path = t.files.file_path(file_idx);
+    jstring rel = env->NewStringUTF(rel_path.c_str());
+    jstring save_path = env->NewStringUTF(t.save_path.c_str());
+
+    jlong fd = env->CallLongMethod(m_bridge, m_mid_open_file, info_hash,
+                                    static_cast<int>(file_idx), rel, save_path);
+
+    env->DeleteLocalRef(info_hash);
+    env->DeleteLocalRef(rel);
+    env->DeleteLocalRef(save_path);
+
+    std::lock_guard<std::mutex> lock(t.mutex);
+    if (t.fds[i] >= 0) {
+        // Lost the race to another thread opening the same file concurrently
+        // -- keep theirs, close ours.
+        if (fd >= 0) ::close(static_cast<int>(fd));
+        return t.fds[i];
+    }
+    t.fds[i] = static_cast<int>(fd); // -1 on failure
+    return t.fds[i];
 }
 
 void saf_disk_io::free_disk_buffer(char* b)
@@ -323,7 +341,7 @@ void saf_disk_io::async_hash2(lt::storage_index_t, lt::piece_index_t piece, int,
     // Reporting success with a zero hash would silently corrupt v2/hybrid
     // torrents' merkle trees, so fail loudly instead until this is real.
     lt::storage_error err(lt::error_code(ENOSYS, boost::system::generic_category()),
-                           lt::operation_t::hash);
+                           lt::operation_t::file_read);
     lt::post(m_ioc, [handler = std::move(handler), piece, err]() {
         handler(piece, lt::sha256_hash{}, err);
     });
@@ -513,11 +531,11 @@ std::vector<lt::open_file_state> saf_disk_io::get_status(lt::storage_index_t sto
     }
     std::lock_guard<std::mutex> lock(t->mutex);
     for (int i = 0; i < static_cast<int>(t->fds.size()); i++) {
-        if (t->fds[i].fd < 0) continue;
+        if (t->fds[i] < 0) continue;
         lt::open_file_state s;
         s.file_index = lt::file_index_t(i);
         s.open_mode = lt::file_open_mode::read_write;
-        s.last_use = lt::time_now(); // not actually tracked per-file -- placeholder
+        s.last_use = lt::clock_type::now(); // not actually tracked per-file -- placeholder
         result.push_back(s);
     }
     return result;

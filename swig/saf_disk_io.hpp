@@ -41,6 +41,7 @@
 
 #include "libtorrent/disk_interface.hpp"
 #include "libtorrent/disk_buffer_holder.hpp"
+#include "libtorrent/file_storage.hpp"   // torrent_entry::files is a by-value member
 #include "libtorrent/io_context.hpp"
 #include "libtorrent/session_params.hpp" // disk_io_constructor_type
 #include "libtorrent/storage_defs.hpp"   // storage_params, storage_mode_t, move_flags_t
@@ -134,19 +135,18 @@ public:
     void free_disk_buffer(char* b) override;
 
 private:
-    struct file_entry
-    {
-        int fd = -1;
-        std::once_flag open_once;
-    };
-
     struct torrent_entry
     {
         lt::file_storage files; // owned copy -- storage_params::files is only
                                  // a reference valid for the new_torrent() call
         std::string save_path;  // owned copy -- storage_params::path is a string_view
         lt::sha1_hash info_hash;
-        std::vector<file_entry> fds; // indexed by file_index_t
+        std::vector<int> fds; // indexed by file_index_t, -1 until opened;
+                               // plain ints (not e.g. once_flag/atomic per
+                               // element) so this stays default-movable/
+                               // copyable for std::vector's own bookkeeping --
+                               // fd_for() serializes first-open under `mutex`
+                               // instead.
         std::mutex mutex;
     };
 
