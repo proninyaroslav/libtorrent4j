@@ -6,10 +6,10 @@
 // Remaining known gaps (fix before this is PR-able upstream):
 //  - error_code construction on failure paths uses errno + generic_category(),
 //    which is right for POSIX pread/pwrite/ftruncate failures, but the
-//    JNI-side "operation failed" (openFile returned -1, deleteFile
+//    provider-side "operation failed" (open_file returned -1, delete_file
 //    returned false, ...) has no errno to report -- currently mapped to a
-//    generic EIO. A real implementation should let DiskIoFileProvider
-//    surface a reason (e.g. an exception message) back through JNI.
+//    generic EIO. A real implementation should let disk_io_file_provider
+//    surface a reason (e.g. an exception message) back to native code.
 //  - async_check_files does not actually verify anything on disk yet
 //    (always reports success), so resume data isn't validated.
 //  - async_set_file_priority is a no-op: no partfile support, so toggling
@@ -24,6 +24,7 @@
 #include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/hasher.hpp"
+#include "libtorrent/hex.hpp"
 #include "libtorrent/operations.hpp"
 #include "libtorrent/peer_request.hpp"
 
@@ -41,9 +42,9 @@ lt::storage_error errno_error(lt::file_index_t file, lt::operation_t op)
 
 lt::storage_error generic_error(lt::file_index_t file, lt::operation_t op)
 {
-    // No errno available (JNI callback returned failure, not a syscall) --
-    // EIO is a placeholder; see file-header note about surfacing a real
-    // reason from DiskIoFileProvider.
+    // No errno available (provider callback returned failure, not a
+    // syscall) -- EIO is a placeholder; see file-header note about
+    // surfacing a real reason from disk_io_file_provider.
     return lt::storage_error(
         lt::error_code(EIO, boost::system::generic_category()), file, op);
 }
@@ -93,59 +94,27 @@ void saf_job_queue::worker_loop()
 }
 
 // --- saf_disk_io ---
-
-JNIEnv* saf_disk_io::attach_jni() const
-{
-    JNIEnv* env = nullptr;
-    jint r = m_jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
-    if (r == JNI_EDETACHED) {
-        // saf_job_queue's worker threads live for the process lifetime in
-        // this skeleton, so never detaching is a bounded, one-time-per-thread
-        // leak of a JNIEnv, not an unbounded one. Revisit if the pool is ever
-        // made to spin threads up/down dynamically.
-        // AttachCurrentThread's penv parameter type is the one JNI signature
-        // that actually differs by platform in swig/jni.h: JNIEnv** on
-        // Android, void** everywhere else (GetEnv above is void** on both).
-#if defined(__ANDROID__)
-        m_jvm->AttachCurrentThread(&env, nullptr);
-#else
-        m_jvm->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr);
-#endif
-    }
-    return env;
-}
+//
+// No manual JNI here -- m_provider is a disk_io_file_provider* whose
+// concrete type is a SWIG director proxy. Virtual calls on it transparently
+// cross into Java, including from this file's own worker-pool threads
+// (SWIG's director runtime handles JNIEnv attach/detach per call, which a
+// hand-rolled bridge previously had to do itself -- see git history).
 
 saf_disk_io::saf_disk_io(lt::io_context& ioc, lt::settings_interface const&,
-                          lt::counters& cnt, JavaVM* jvm, jobject bridge_global_ref)
+                          lt::counters& cnt, disk_io_file_provider* provider)
     : m_ioc(ioc)
     , m_stats(cnt)
-    , m_jvm(jvm)
-    , m_bridge(bridge_global_ref)
+    , m_provider(provider)
     , m_pool(4) // TODO: derive from settings_pack (aio_threads) instead of hardcoding
 {
-    JNIEnv* env = attach_jni();
-    jclass local = env->GetObjectClass(m_bridge);
-    m_bridge_class = static_cast<jclass>(env->NewGlobalRef(local));
-    env->DeleteLocalRef(local);
-
-    m_mid_open_file = env->GetMethodID(m_bridge_class, "openFile",
-        "([BILjava/lang/String;Ljava/lang/String;)J");
-    m_mid_release_file = env->GetMethodID(m_bridge_class, "releaseFile",
-        "([BIJLjava/lang/String;Ljava/lang/String;)V");
-    m_mid_delete_file = env->GetMethodID(m_bridge_class, "deleteFile",
-        "([BILjava/lang/String;Ljava/lang/String;)Z");
-    m_mid_rename_file = env->GetMethodID(m_bridge_class, "renameFile",
-        "([BILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
-    m_mid_move_storage = env->GetMethodID(m_bridge_class, "moveStorage",
-        "([BLjava/lang/String;Ljava/lang/String;)Z");
 }
 
-saf_disk_io::~saf_disk_io()
+saf_disk_io::~saf_disk_io() = default;
+
+std::string saf_disk_io::hex_info_hash(lt::sha1_hash const& h)
 {
-    JNIEnv* env = attach_jni();
-    env->DeleteGlobalRef(m_bridge_class);
-    // m_bridge itself is owned by whoever called saf_disk_io_constructor --
-    // released after the session tied to it is destroyed, not here.
+    return lt::aux::to_hex({h.data(), h.size()});
 }
 
 std::shared_ptr<saf_disk_io::torrent_entry> saf_disk_io::torrent_for(lt::storage_index_t storage) const
@@ -188,25 +157,16 @@ void saf_disk_io::remove_torrent(lt::storage_index_t storage)
 
 void saf_disk_io::release_all(torrent_entry& t)
 {
-    JNIEnv* env = attach_jni();
     std::lock_guard<std::mutex> lock(t.mutex);
-    jbyteArray info_hash = env->NewByteArray(20);
-    env->SetByteArrayRegion(info_hash, 0, 20,
-        reinterpret_cast<const jbyte*>(t.info_hash.data()));
-    jstring save_path = env->NewStringUTF(t.save_path.c_str());
+    std::string const info_hash = hex_info_hash(t.info_hash);
 
     for (int i = 0; i < static_cast<int>(t.fds.size()); i++) {
         if (t.fds[i] < 0) continue;
         std::string rel_path = t.files.file_path(lt::file_index_t(i));
-        jstring rel = env->NewStringUTF(rel_path.c_str());
-        env->CallVoidMethod(m_bridge, m_mid_release_file, info_hash, i,
-                             static_cast<jlong>(t.fds[i]), rel, save_path);
-        ::close(t.fds[i]); // native side owns the fd; bridge impl must NOT close it too
+        m_provider->release_file(info_hash, i, t.fds[i], rel_path, t.save_path);
+        ::close(t.fds[i]); // native side owns the fd; provider must NOT close it too
         t.fds[i] = -1;
-        env->DeleteLocalRef(rel);
     }
-    env->DeleteLocalRef(info_hash);
-    env->DeleteLocalRef(save_path);
 }
 
 int saf_disk_io::fd_for(torrent_entry& t, lt::file_index_t file_idx)
@@ -223,20 +183,9 @@ int saf_disk_io::fd_for(torrent_entry& t, lt::file_index_t file_idx)
         if (t.fds[i] >= 0) return t.fds[i];
     }
 
-    JNIEnv* env = attach_jni();
-    jbyteArray info_hash = env->NewByteArray(20);
-    env->SetByteArrayRegion(info_hash, 0, 20,
-        reinterpret_cast<const jbyte*>(t.info_hash.data()));
+    std::string const info_hash = hex_info_hash(t.info_hash);
     std::string rel_path = t.files.file_path(file_idx);
-    jstring rel = env->NewStringUTF(rel_path.c_str());
-    jstring save_path = env->NewStringUTF(t.save_path.c_str());
-
-    jlong fd = env->CallLongMethod(m_bridge, m_mid_open_file, info_hash,
-                                    static_cast<int>(file_idx), rel, save_path);
-
-    env->DeleteLocalRef(info_hash);
-    env->DeleteLocalRef(rel);
-    env->DeleteLocalRef(save_path);
+    long fd = m_provider->open_file(info_hash, static_cast<int>(file_idx), rel_path, t.save_path);
 
     std::lock_guard<std::mutex> lock(t.mutex);
     if (t.fds[i] >= 0) {
@@ -372,22 +321,12 @@ void saf_disk_io::async_move_storage(lt::storage_index_t storage, std::string p,
         return;
     }
 
-    JNIEnv* env = attach_jni();
-    jbyteArray info_hash = env->NewByteArray(20);
-    env->SetByteArrayRegion(info_hash, 0, 20,
-        reinterpret_cast<const jbyte*>(t->info_hash.data()));
-    jstring old_path = env->NewStringUTF(t->save_path.c_str());
-    jstring new_path = env->NewStringUTF(p.c_str());
-
-    jboolean ok = env->CallBooleanMethod(m_bridge, m_mid_move_storage, info_hash, old_path, new_path);
-
-    env->DeleteLocalRef(info_hash);
-    env->DeleteLocalRef(old_path);
-    env->DeleteLocalRef(new_path);
+    std::string const info_hash = hex_info_hash(t->info_hash);
+    bool ok = m_provider->move_storage(info_hash, t->save_path, p);
 
     lt::status_t status = ok ? lt::status_t{} : lt::disk_status::fatal_disk_error;
     lt::storage_error err = ok ? lt::storage_error{} : generic_error(lt::file_index_t(-1), lt::operation_t::file_rename);
-    std::string result_path = t->save_path; // moveStorage() didn't move fds, only the
+    std::string result_path = t->save_path; // move_storage() didn't move fds, only the
                                              // backing files -- next fd_for() call per
                                              // file will re-open lazily under new_path;
                                              // existing open fds stay valid (same inode).
@@ -420,22 +359,13 @@ void saf_disk_io::async_delete_files(lt::storage_index_t storage, lt::remove_fla
     auto t = torrent_for(storage);
     release_all(*t); // fds must be closed before their backing files can be deleted
 
-    JNIEnv* env = attach_jni();
-    jbyteArray info_hash = env->NewByteArray(20);
-    env->SetByteArrayRegion(info_hash, 0, 20,
-        reinterpret_cast<const jbyte*>(t->info_hash.data()));
-    jstring save_path = env->NewStringUTF(t->save_path.c_str());
-
+    std::string const info_hash = hex_info_hash(t->info_hash);
     lt::storage_error err;
     for (int i = 0; i < t->files.num_files(); i++) {
         std::string rel_path = t->files.file_path(lt::file_index_t(i));
-        jstring rel = env->NewStringUTF(rel_path.c_str());
-        jboolean ok = env->CallBooleanMethod(m_bridge, m_mid_delete_file, info_hash, i, rel, save_path);
-        env->DeleteLocalRef(rel);
+        bool ok = m_provider->delete_file(info_hash, i, rel_path, t->save_path);
         if (!ok && !err) err = generic_error(lt::file_index_t(i), lt::operation_t::file_remove);
     }
-    env->DeleteLocalRef(info_hash);
-    env->DeleteLocalRef(save_path);
 
     lt::post(m_ioc, [handler = std::move(handler), err]() { handler(err); });
 }
@@ -458,22 +388,9 @@ void saf_disk_io::async_rename_file(lt::storage_index_t storage, lt::file_index_
 {
     auto t = torrent_for(storage);
 
-    JNIEnv* env = attach_jni();
-    jbyteArray info_hash = env->NewByteArray(20);
-    env->SetByteArrayRegion(info_hash, 0, 20,
-        reinterpret_cast<const jbyte*>(t->info_hash.data()));
+    std::string const info_hash = hex_info_hash(t->info_hash);
     std::string old_rel = t->files.file_path(file_idx);
-    jstring rel = env->NewStringUTF(old_rel.c_str());
-    jstring save_path = env->NewStringUTF(t->save_path.c_str());
-    jstring new_name = env->NewStringUTF(name.c_str());
-
-    jboolean ok = env->CallBooleanMethod(m_bridge, m_mid_rename_file, info_hash,
-                                          static_cast<int>(file_idx), rel, save_path, new_name);
-
-    env->DeleteLocalRef(info_hash);
-    env->DeleteLocalRef(rel);
-    env->DeleteLocalRef(save_path);
-    env->DeleteLocalRef(new_name);
+    bool ok = m_provider->rename_file(info_hash, static_cast<int>(file_idx), old_rel, t->save_path, name);
 
     lt::storage_error err = ok ? lt::storage_error{} : generic_error(file_idx, lt::operation_t::file_rename);
     std::string result = ok ? name : old_rel;
@@ -552,10 +469,10 @@ void saf_disk_io::abort(bool) {}
 void saf_disk_io::submit_jobs() {}
 void saf_disk_io::settings_updated() {}
 
-lt::disk_io_constructor_type saf_disk_io_constructor(JavaVM* jvm, jobject bridge_global_ref)
+lt::disk_io_constructor_type saf_disk_io_constructor(disk_io_file_provider* provider)
 {
-    return [jvm, bridge_global_ref](lt::io_context& ioc, lt::settings_interface const& settings,
-                                     lt::counters& cnt) -> std::unique_ptr<lt::disk_interface> {
-        return std::make_unique<saf_disk_io>(ioc, settings, cnt, jvm, bridge_global_ref);
+    return [provider](lt::io_context& ioc, lt::settings_interface const& settings,
+                       lt::counters& cnt) -> std::unique_ptr<lt::disk_interface> {
+        return std::make_unique<saf_disk_io>(ioc, settings, cnt, provider);
     };
 }

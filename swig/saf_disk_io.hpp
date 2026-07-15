@@ -1,11 +1,16 @@
 // saf_disk_io.hpp
 //
 // A disk_interface implementation that resolves every torrent file to a
-// native fd via a JNI callback into a Java-side DiskIoFileProvider
-// (src/main/java/org/libtorrent4j/DiskIoFileProvider.java), instead of
-// opening paths itself. Written for Android SAF (content:// / DocumentFile)
-// as the motivating case, but the JNI contract is deliberately
+// native fd via a Java-side disk_io_file_provider (saf_disk_io_listener.hpp),
+// implemented in Java through SWIG's director mechanism -- the same
+// mechanism list_files_listener/set_piece_hashes_listener already use, see
+// swig/libtorrent.i. Written for Android SAF (content:// / DocumentFile) as
+// the motivating case, but the provider contract is deliberately
 // SAF-agnostic -- native code only ever asks "give me an fd for this file".
+// No manual JNI in this file: the director-generated proxy class handles
+// thread attach/detach for calls made from arbitrary native threads (e.g.
+// this file's own worker pool), which a hand-rolled JNIEnv/jmethodID bridge
+// would otherwise have to do itself.
 //
 // Modeled on posix_disk_io (fd-based pread/pwrite) rather than
 // mmap_disk_io: SAF-provided fds are not guaranteed to be safely mmap-able
@@ -28,8 +33,6 @@
 
 #pragma once
 
-#include <jni.h>
-
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -45,6 +48,8 @@
 #include "libtorrent/io_context.hpp"
 #include "libtorrent/session_params.hpp" // disk_io_constructor_type
 #include "libtorrent/storage_defs.hpp"   // storage_params, storage_mode_t, move_flags_t
+
+#include "saf_disk_io_listener.hpp" // disk_io_file_provider
 
 namespace lt = libtorrent;
 
@@ -72,7 +77,7 @@ class saf_disk_io final : public lt::disk_interface, public lt::buffer_allocator
 {
 public:
     saf_disk_io(lt::io_context& ioc, lt::settings_interface const& settings,
-                lt::counters& cnt, JavaVM* jvm, jobject bridge_global_ref);
+                lt::counters& cnt, disk_io_file_provider* provider);
     ~saf_disk_io() override;
 
     // --- lt::disk_interface ---
@@ -152,25 +157,22 @@ private:
 
     std::shared_ptr<torrent_entry> torrent_for(lt::storage_index_t storage) const;
 
-    // Resolves (and lazily opens via JNI) the fd for a given file. May block
-    // the calling worker thread on first access only (JNI round-trip);
-    // cached thereafter. Returns -1 on failure.
+    // Resolves (and lazily opens via the provider) the fd for a given file.
+    // May block the calling worker thread on first access only (crosses
+    // into Java); cached thereafter. Returns -1 on failure.
     int fd_for(torrent_entry& t, lt::file_index_t file_idx);
     void release_all(torrent_entry& t);
 
-    JNIEnv* attach_jni() const;
+    static std::string hex_info_hash(lt::sha1_hash const& h);
 
     lt::io_context& m_ioc;
     lt::counters& m_stats;
 
-    JavaVM* m_jvm;
-    jobject m_bridge; // global ref to the Java DiskIoFileProvider, owned by caller
-    jclass m_bridge_class;
-    jmethodID m_mid_open_file;
-    jmethodID m_mid_release_file;
-    jmethodID m_mid_delete_file;
-    jmethodID m_mid_rename_file;
-    jmethodID m_mid_move_storage;
+    disk_io_file_provider* m_provider; // non-owning -- caller (see
+                                        // session_params.i's
+                                        // set_saf_disk_io_constructor) must
+                                        // keep the Java-side object alive
+                                        // for the lifetime of the session
 
     mutable std::mutex m_torrents_mutex;
     std::map<std::uint32_t, std::shared_ptr<torrent_entry>> m_torrents;
@@ -179,8 +181,7 @@ private:
     saf_job_queue m_pool;
 };
 
-// Bind this into session_params::disk_io_constructor. `jvm` and
-// `bridge_global_ref` must outlive the session (bridge_global_ref should be
-// created with NewGlobalRef by the caller and released only after the
-// session tied to it is destroyed).
-lt::disk_io_constructor_type saf_disk_io_constructor(JavaVM* jvm, jobject bridge_global_ref);
+// Bind this into session_params::disk_io_constructor (see
+// set_saf_disk_io_constructor() in session_params.i). `provider` must
+// outlive the session.
+lt::disk_io_constructor_type saf_disk_io_constructor(disk_io_file_provider* provider);

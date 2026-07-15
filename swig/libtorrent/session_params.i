@@ -45,6 +45,14 @@ namespace libtorrent
     {
         $self->disk_io_constructor = lt::default_disk_io_constructor;
     }
+
+    // `provider` must outlive this session (and any session restarted from
+    // params saved via write_session_params) -- it's stored as a raw
+    // pointer, ownership stays with the Java caller. See saf_disk_io.hpp.
+    void set_saf_disk_io_constructor(disk_io_file_provider* provider)
+    {
+        $self->disk_io_constructor = saf_disk_io_constructor(provider);
+    }
 }
 
 }

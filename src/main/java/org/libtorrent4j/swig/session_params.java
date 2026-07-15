@@ -137,4 +137,8 @@ public class session_params {
     libtorrent_jni.session_params_set_default_disk_io_constructor(swigCPtr, this);
   }
 
+  public void set_saf_disk_io_constructor(disk_io_file_provider provider) {
+    libtorrent_jni.session_params_set_saf_disk_io_constructor(swigCPtr, this, disk_io_file_provider.getCPtr(provider), provider);
+  }
+
 }

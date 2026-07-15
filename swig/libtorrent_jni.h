@@ -9,6 +9,25 @@
 #ifndef SWIG_libtorrent_WRAP_H_
 #define SWIG_libtorrent_WRAP_H_
 
+struct SwigDirector_disk_io_file_provider : public disk_io_file_provider, public Swig::Director {
+
+public:
+    void swig_connect_director(JNIEnv *jenv, jobject jself, jclass jcls, bool swig_mem_own, bool weak_global);
+    SwigDirector_disk_io_file_provider(JNIEnv *jenv);
+    virtual ~SwigDirector_disk_io_file_provider();
+    virtual long open_file(std::string info_hash,int file_index,std::string relative_path,std::string save_path);
+    virtual void release_file(std::string info_hash,int file_index,long fd,std::string relative_path,std::string save_path);
+    virtual bool delete_file(std::string info_hash,int file_index,std::string relative_path,std::string save_path);
+    virtual bool rename_file(std::string info_hash,int file_index,std::string relative_path,std::string save_path,std::string new_name);
+    virtual bool move_storage(std::string info_hash,std::string old_save_path,std::string new_save_path);
+public:
+    bool swig_overrides(int n) {
+      return (n < 5 ? swig_override[n] : false);
+    }
+protected:
+    Swig::BoolArray<5> swig_override;
+};
+
 struct SwigDirector_alert_notify_callback : public alert_notify_callback, public Swig::Director {
 
 public:

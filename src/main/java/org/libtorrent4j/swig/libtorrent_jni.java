@@ -691,6 +691,20 @@ public class libtorrent_jni {
   public final static native boolean bitset_128_get(long jarg1, bitset_128 jarg1_, long jarg2);
   public final static native long new_bitset_128();
   public final static native void delete_bitset_128(long jarg1);
+  public final static native void delete_disk_io_file_provider(long jarg1);
+  public final static native int disk_io_file_provider_open_file(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, String jarg4, String jarg5);
+  public final static native int disk_io_file_provider_open_fileSwigExplicitdisk_io_file_provider(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, String jarg4, String jarg5);
+  public final static native void disk_io_file_provider_release_file(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, int jarg4, String jarg5, String jarg6);
+  public final static native void disk_io_file_provider_release_fileSwigExplicitdisk_io_file_provider(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, int jarg4, String jarg5, String jarg6);
+  public final static native boolean disk_io_file_provider_delete_file(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, String jarg4, String jarg5);
+  public final static native boolean disk_io_file_provider_delete_fileSwigExplicitdisk_io_file_provider(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, String jarg4, String jarg5);
+  public final static native boolean disk_io_file_provider_rename_file(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, String jarg4, String jarg5, String jarg6);
+  public final static native boolean disk_io_file_provider_rename_fileSwigExplicitdisk_io_file_provider(long jarg1, disk_io_file_provider jarg1_, String jarg2, int jarg3, String jarg4, String jarg5, String jarg6);
+  public final static native boolean disk_io_file_provider_move_storage(long jarg1, disk_io_file_provider jarg1_, String jarg2, String jarg3, String jarg4);
+  public final static native boolean disk_io_file_provider_move_storageSwigExplicitdisk_io_file_provider(long jarg1, disk_io_file_provider jarg1_, String jarg2, String jarg3, String jarg4);
+  public final static native long new_disk_io_file_provider();
+  public final static native void disk_io_file_provider_director_connect(disk_io_file_provider obj, long cptr, boolean mem_own, boolean weak_global);
+  public final static native void disk_io_file_provider_change_ownership(disk_io_file_provider obj, long cptr, boolean take_or_release);
   public final static native long new_error_code();
   public final static native void error_code_clear(long jarg1, error_code jarg1_);
   public final static native int error_code_value(long jarg1, error_code jarg1_);
@@ -3327,6 +3341,7 @@ public class libtorrent_jni {
   public final static native long session_params_write_session_params_buf__SWIG_1(long jarg1, session_params jarg1_);
   public final static native void session_params_set_posix_disk_io_constructor(long jarg1, session_params jarg1_);
   public final static native void session_params_set_default_disk_io_constructor(long jarg1, session_params jarg1_);
+  public final static native void session_params_set_saf_disk_io_constructor(long jarg1, session_params jarg1_, long jarg2, disk_io_file_provider jarg2_);
   public final static native long new_session_handle__SWIG_0();
   public final static native long new_session_handle__SWIG_1(long jarg1, session_handle jarg1_);
   public final static native boolean session_handle_is_valid(long jarg1, session_handle jarg1_);
@@ -3589,6 +3604,8 @@ public class libtorrent_jni {
   public final static native long write_torrent_file_buf_ex(long jarg1, add_torrent_params jarg1_);
   public final static native long parse_magnet_uri(String jarg1, long jarg2, error_code jarg2_);
   public final static native String make_magnet_uri_from_torrent_handle(long jarg1, torrent_handle jarg1_);
+  public final static native int test_open_native_fd(String jarg1);
+  public final static native void test_close_native_fd(int jarg1);
   public final static native long torrent_alert_SWIGUpcast(long jarg1);
   public final static native long peer_alert_SWIGUpcast(long jarg1);
   public final static native long tracker_alert_SWIGUpcast(long jarg1);
@@ -3690,6 +3707,21 @@ public class libtorrent_jni {
   public final static native long settings_pack_SWIGUpcast(long jarg1);
   public final static native long session_SWIGUpcast(long jarg1);
 
+  public static int SwigDirector_disk_io_file_provider_open_file(disk_io_file_provider jself, String info_hash, int file_index, String relative_path, String save_path) {
+    return jself.open_file(info_hash, file_index, relative_path, save_path);
+  }
+  public static void SwigDirector_disk_io_file_provider_release_file(disk_io_file_provider jself, String info_hash, int file_index, int fd, String relative_path, String save_path) {
+    jself.release_file(info_hash, file_index, fd, relative_path, save_path);
+  }
+  public static boolean SwigDirector_disk_io_file_provider_delete_file(disk_io_file_provider jself, String info_hash, int file_index, String relative_path, String save_path) {
+    return jself.delete_file(info_hash, file_index, relative_path, save_path);
+  }
+  public static boolean SwigDirector_disk_io_file_provider_rename_file(disk_io_file_provider jself, String info_hash, int file_index, String relative_path, String save_path, String new_name) {
+    return jself.rename_file(info_hash, file_index, relative_path, save_path, new_name);
+  }
+  public static boolean SwigDirector_disk_io_file_provider_move_storage(disk_io_file_provider jself, String info_hash, String old_save_path, String new_save_path) {
+    return jself.move_storage(info_hash, old_save_path, new_save_path);
+  }
   public static void SwigDirector_alert_notify_callback_on_alert(alert_notify_callback jself) {
     jself.on_alert();
   }

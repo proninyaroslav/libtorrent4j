@@ -98,6 +98,9 @@
 #include <libtorrent/hex.hpp>
 #include <libtorrent/bencode.hpp>
 
+#include "saf_disk_io_listener.hpp"
+#include "saf_disk_io.hpp"
+
 namespace lt = libtorrent;
 
 using piece_index_t = libtorrent::piece_index_t;
@@ -276,6 +279,13 @@ TYPE_INTEGRAL_CONVERSION(queue_position_t, int, int)
 %feature("director") alert_notify_callback;
 %feature("director") list_files_listener;
 %feature("director") set_piece_hashes_listener;
+%feature("director") disk_io_file_provider;
+
+// saf_disk_io_listener.hpp is %include'd here (rather than alongside
+// libtorrent.hpp at the end of this file, where the other three directors'
+// declarations live) because session_params.i's set_saf_disk_io_constructor
+// %extend method below needs disk_io_file_provider already known to SWIG.
+%include "saf_disk_io_listener.hpp"
 
 // includes
 %include "boost/system/error_code.i"

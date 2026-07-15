@@ -8,6 +8,9 @@
 #ifndef LIBTORRENT_HPP
 #define LIBTORRENT_HPP
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <boost/version.hpp>
 #include <openssl/opensslv.h>
 
@@ -366,5 +369,20 @@ extern "C" ssize_t getrandom(void* __buffer, size_t __buffer_size, unsigned int 
     return __buffer_size;
 }
 #endif
+
+// Test-only helper for exercising disk_io_file_provider (see
+// saf_disk_io_listener.hpp) from plain JVM tests: opens a native fd for a
+// regular file by path, standing in for a platform-specific fd source
+// (Android's ContentResolver.openFileDescriptor() in production) that
+// isn't available outside Android. Not used by any non-test code path.
+long test_open_native_fd(std::string path)
+{
+    return ::open(path.c_str(), O_CREAT | O_RDWR, 0644);
+}
+
+void test_close_native_fd(long fd)
+{
+    if (fd >= 0) ::close(static_cast<int>(fd));
+}
 
 #endif

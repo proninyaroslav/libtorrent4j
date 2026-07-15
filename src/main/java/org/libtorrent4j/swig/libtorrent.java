@@ -488,4 +488,12 @@ public class libtorrent {
     return libtorrent_jni.make_magnet_uri_from_torrent_handle(torrent_handle.getCPtr(handle), handle);
   }
 
+  public static int test_open_native_fd(String path) {
+    return libtorrent_jni.test_open_native_fd(path);
+  }
+
+  public static void test_close_native_fd(int fd) {
+    libtorrent_jni.test_close_native_fd(fd);
+  }
+
 }
