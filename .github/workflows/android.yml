@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - disk_interface
   pull_request:
     branches:
       - master
