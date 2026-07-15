@@ -103,7 +103,14 @@ JNIEnv* saf_disk_io::attach_jni() const
         // this skeleton, so never detaching is a bounded, one-time-per-thread
         // leak of a JNIEnv, not an unbounded one. Revisit if the pool is ever
         // made to spin threads up/down dynamically.
+        // AttachCurrentThread's penv parameter type is the one JNI signature
+        // that actually differs by platform in swig/jni.h: JNIEnv** on
+        // Android, void** everywhere else (GetEnv above is void** on both).
+#if defined(__ANDROID__)
+        m_jvm->AttachCurrentThread(&env, nullptr);
+#else
         m_jvm->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr);
+#endif
     }
     return env;
 }
