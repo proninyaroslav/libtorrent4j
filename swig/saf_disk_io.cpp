@@ -106,7 +106,13 @@ saf_disk_io::saf_disk_io(lt::io_context& ioc, lt::settings_interface const&,
     : m_ioc(ioc)
     , m_stats(cnt)
     , m_provider(provider)
-    , m_pool(4) // TODO: derive from settings_pack (aio_threads) instead of hardcoding
+    , m_pool(1) // Deliberately single-threaded for now -- a concurrency bug
+                // (worker threads racing on writes/hashes for different
+                // pieces of the same torrent) caused reproducible hash
+                // failures with a 4-thread pool; SafDiskIoTest is green at
+                // 1 thread, red at 4. Root cause not yet isolated -- see
+                // "Known correctness gaps" in swig/SAF_DISK_IO_NOTES.md
+                // before raising this back up.
 {
 }
 

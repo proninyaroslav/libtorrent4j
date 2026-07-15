@@ -51,7 +51,22 @@ public class SafDiskIoTest {
         new Random(42).nextBytes(content);
         Files.write(seedFile.toPath(), content);
 
-        TorrentBuilder.Result built = new TorrentBuilder().path(seedDir).generate();
+        // Build from the file directly (not seedDir) so the resulting
+        // torrent is a plain single-file torrent named "test.bin" with no
+        // extra directory nesting -- building from a directory names the
+        // torrent after the directory's basename and expects the file one
+        // level deeper (seedDir/seed/test.bin), which doesn't match where
+        // the file actually is (seedDir/test.bin) and made the seeder's
+        // initial hash-check find nothing, silently reporting HAVE_NONE.
+        // v1-only: async_hash2 (BitTorrent v2 per-block SHA-256) isn't
+        // implemented in saf_disk_io yet (see swig/SAF_DISK_IO_NOTES.md) --
+        // a v2/hybrid torrent's merkle-tree verification needs it to
+        // succeed, and it deliberately fails loudly instead. Leaving this
+        // test on a hybrid torrent (TorrentBuilder's default) crashed the
+        // JVM inside libtorrent::aux::piece_picker::completed_hash_job.
+        TorrentBuilder.Result built = new TorrentBuilder().path(seedFile)
+            .flags(TorrentBuilder.V1_ONLY)
+            .generate();
         TorrentInfo ti = TorrentInfo.bdecode(built.entry().bencode());
 
         File leechDir = folder.newFolder("leech");
@@ -62,33 +77,21 @@ public class SafDiskIoTest {
         try {
             AtomicInteger seederPortHolder = new AtomicInteger(-1);
             CountDownLatch seederListening = new CountDownLatch(1);
+            CountDownLatch seederTorrentResumed = new CountDownLatch(1);
             seeder.addListener(new AlertListener() {
                 @Override
                 public int[] types() {
-                    return new int[]{AlertType.LISTEN_SUCCEEDED.swig()};
+                    return new int[]{AlertType.LISTEN_SUCCEEDED.swig(), AlertType.TORRENT_RESUMED.swig()};
                 }
 
                 @Override
                 public void alert(Alert<?> alert) {
-                    seederPortHolder.set(((ListenSucceededAlert) alert).port());
-                    seederListening.countDown();
-                }
-            });
-
-            seeder.addListener(new AlertListener() {
-                @Override
-                public int[] types() { return null; }
-                @Override
-                public void alert(Alert<?> alert) {
-                    System.out.println("[seeder] " + alert.type() + ": " + alert.message());
-                }
-            });
-            leecher.addListener(new AlertListener() {
-                @Override
-                public int[] types() { return null; }
-                @Override
-                public void alert(Alert<?> alert) {
-                    System.out.println("[leecher] " + alert.type() + ": " + alert.message());
+                    if (alert.type() == AlertType.LISTEN_SUCCEEDED) {
+                        seederPortHolder.set(((ListenSucceededAlert) alert).port());
+                        seederListening.countDown();
+                    } else if (alert.type() == AlertType.TORRENT_RESUMED) {
+                        seederTorrentResumed.countDown();
+                    }
                 }
             });
 
@@ -96,9 +99,6 @@ public class SafDiskIoTest {
             seederSettings.setEnableDht(false);
             seederSettings.setEnableLsd(false);
             seederSettings.listenInterfaces("127.0.0.1:0");
-            seederSettings.setBoolean(org.libtorrent4j.swig.settings_pack.bool_types.enable_outgoing_utp.swigValue(), false);
-            seederSettings.setBoolean(org.libtorrent4j.swig.settings_pack.bool_types.enable_incoming_utp.swigValue(), false);
-            seederSettings.setInteger(org.libtorrent4j.swig.settings_pack.int_types.handshake_timeout.swigValue(), 120);
             seeder.start(new SessionParams(seederSettings));
             seeder.download(ti, seedDir);
 
@@ -107,13 +107,20 @@ public class SafDiskIoTest {
             }
             int seederPort = seederPortHolder.get();
 
+            // A freshly added torrent is auto-managed and starts paused;
+            // incoming connections are rejected ("no active torrents") until
+            // the auto-manager gets around to resuming it, which does not
+            // happen the instant LISTEN_SUCCEEDED fires. Connecting the
+            // leecher before this landed the very first (and in this test,
+            // only) connection attempt in a dropped-with-EOF race.
+            if (!seederTorrentResumed.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("seeder's torrent never resumed (stayed paused)");
+            }
+
             SettingsPack leechSettings = new SettingsPack();
             leechSettings.setEnableDht(false);
             leechSettings.setEnableLsd(false);
             leechSettings.listenInterfaces("127.0.0.1:0");
-            leechSettings.setBoolean(org.libtorrent4j.swig.settings_pack.bool_types.enable_outgoing_utp.swigValue(), false);
-            leechSettings.setBoolean(org.libtorrent4j.swig.settings_pack.bool_types.enable_incoming_utp.swigValue(), false);
-            leechSettings.setInteger(org.libtorrent4j.swig.settings_pack.int_types.handshake_timeout.swigValue(), 120);
             SessionParams leechParams = new SessionParams(leechSettings);
             leechParams.swig().set_saf_disk_io_constructor(provider);
             leecher.start(leechParams);
@@ -145,17 +152,10 @@ public class SafDiskIoTest {
     }
 
     private static void waitUntilFinished(TorrentHandle th) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 45_000;
+        long deadline = System.currentTimeMillis() + 30_000;
         while (System.currentTimeMillis() < deadline) {
-            TorrentStatus st = th.status();
-            System.out.println("state=" + st.state()
-                + " progress=" + st.progress()
-                + " total_done=" + st.totalDone()
-                + " num_peers=" + st.numPeers()
-                + " num_pieces=" + st.numPieces()
-                + " error=" + st.errorCode().getMessage());
-            if (st.isFinished()) return;
-            Thread.sleep(1000);
+            if (th.status().isFinished()) return;
+            Thread.sleep(200);
         }
         throw new AssertionError("download did not finish within the timeout"
             + " -- state=" + th.status().state());
